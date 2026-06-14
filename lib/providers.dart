@@ -212,8 +212,61 @@ class MembersController extends AsyncNotifier<List<String>> {
   }
 }
 
-/// Watches for group keys wrapped *to me* and adopts them (epoch-guarded).
-/// The UI must watch this for it to run. Emits the running count adopted.
+/// A group key wrapped to me that I haven't accepted yet — a join offer awaiting
+/// an explicit Accept/Decline, so I'm never pulled into a group silently.
+class PendingInvite {
+  final String senderPub;
+  final Uint8List key;
+  final int epoch;
+  const PendingInvite(this.senderPub, this.key, this.epoch);
+}
+
+/// Join offers awaiting the user's decision. The key inbox routes first-time
+/// invites here instead of adopting them; the UI shows Accept/Decline.
+final pendingInvitesProvider =
+    NotifierProvider<PendingInvitesController, List<PendingInvite>>(
+        PendingInvitesController.new);
+
+class PendingInvitesController extends Notifier<List<PendingInvite>> {
+  // Sender+epoch we've already surfaced or dismissed, so a relay re-delivering
+  // the same wrapped-key event doesn't re-prompt after Accept/Decline.
+  final _settled = <String>{};
+
+  @override
+  List<PendingInvite> build() => const [];
+
+  String _id(String sender, int epoch) => '$sender@$epoch';
+
+  /// Surface a new join offer, ignoring ones already pending or settled.
+  void offer(PendingInvite invite) {
+    if (!_settled.add(_id(invite.senderPub, invite.epoch))) return;
+    state = [...state, invite];
+  }
+
+  void _drop(PendingInvite invite) =>
+      state = state.where((i) => i != invite).toList();
+
+  /// Accept an offer: adopt its key and add the inviter to the roster.
+  Future<void> accept(PendingInvite invite) async {
+    await ref.read(groupProvider.notifier).adopt(invite.key, invite.epoch);
+    await ref.read(membersProvider.notifier).add(invite.senderPub);
+    _drop(invite);
+    ref.read(logProvider.notifier).add(
+        'accepted invite (epoch ${invite.epoch}) from ${_short(invite.senderPub)}');
+  }
+
+  /// Decline an offer: drop it (and remember it, so it won't re-prompt).
+  void decline(PendingInvite invite) {
+    _drop(invite);
+    ref.read(logProvider.notifier).add(
+        'declined invite from ${_short(invite.senderPub)}', level: LogLevel.warn);
+  }
+}
+
+/// Watches for group keys wrapped *to me*. Re-keys from a member already in our
+/// roster are adopted automatically (we're in the group already); a first-time
+/// invite is routed to [pendingInvitesProvider] for explicit Accept/Decline.
+/// The UI must watch this for it to run. Emits the running count handled.
 final keyInboxProvider = StreamProvider<int>((ref) async* {
   final kp = await ref.read(identityProvider.future);
   final ndk = ref.read(ndkProvider);
@@ -229,23 +282,32 @@ final keyInboxProvider = StreamProvider<int>((ref) async* {
     try {
       final key = await GroupSession.openWrappedKey(kp, e.pubKey, e);
       final epoch = int.tryParse(GroupSession.tagValue(e, 'epoch') ?? '1') ?? 1;
-      // Trust-on-first-use: the first key (we're not in a group yet) is from
-      // whoever added us — adopt it. After that, only a sender already in our
-      // roster may hand us a new key, so a stranger can't push a higher-epoch
-      // key to hijack our session. (Anyone can encrypt to our public key, so the
-      // decrypt succeeding above is not by itself proof of trust.)
+      // Anyone can encrypt to our public key, so a successful decrypt above is
+      // not by itself proof of trust — the sender still has to be vetted.
       final inGroup = ref.read(groupProvider).asData?.value != null;
       final known = ref.read(membersProvider).asData?.value ?? const [];
       if (inGroup && !known.contains(e.pubKey)) {
+        // A stranger trying to push a key while we're in a group — never adopt.
         ref.read(logProvider.notifier).add(
             'ignored key from unknown ${_short(e.pubKey)}', level: LogLevel.warn);
         continue;
       }
-      await ref.read(groupProvider.notifier).adopt(key, epoch);
-      await ref.read(membersProvider.notifier).add(e.pubKey);
-      ref.read(logProvider.notifier)
-          .add('adopted group key (epoch $epoch) from ${_short(e.pubKey)}');
-      yield ++adopted;
+      if (inGroup) {
+        // A re-key from a roster member we already trust — adopt automatically
+        // (epoch-guarded), no need to re-prompt; we're already in the group.
+        await ref.read(groupProvider.notifier).adopt(key, epoch);
+        await ref.read(membersProvider.notifier).add(e.pubKey);
+        ref.read(logProvider.notifier)
+            .add('adopted re-key (epoch $epoch) from ${_short(e.pubKey)}');
+        yield ++adopted;
+      } else {
+        // A first-time invite — don't join silently. Surface it for the user to
+        // Accept or Decline (closes the trust-on-first-use window).
+        ref.read(pendingInvitesProvider.notifier)
+            .offer(PendingInvite(e.pubKey, key, epoch));
+        ref.read(logProvider.notifier)
+            .add('invite received from ${_short(e.pubKey)} — awaiting accept');
+      }
     } catch (_) {
       // Not wrapped to us / not decryptable — ignore.
     }

@@ -147,6 +147,18 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 ),
               ),
             ),
+          if (ref.watch(pendingInvitesProvider).isNotEmpty)
+            Positioned(
+              top: 8,
+              left: 8,
+              right: 8,
+              child: Column(
+                children: [
+                  for (final invite in ref.watch(pendingInvitesProvider))
+                    _InviteBanner(invite: invite),
+                ],
+              ),
+            ),
         ],
       ),
       floatingActionButton: Column(
@@ -234,6 +246,46 @@ class _MapScreenState extends ConsumerState<MapScreen> {
             size: 32,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Prompt for a group key wrapped to us that we haven't joined yet. Accept adopts
+/// the key (joining the group); Decline drops it so we're never pulled in silently.
+class _InviteBanner extends ConsumerWidget {
+  const _InviteBanner({required this.invite});
+
+  final PendingInvite invite;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final notifier = ref.read(pendingInvitesProvider.notifier);
+    return Card(
+      color: Theme.of(context).colorScheme.secondaryContainer,
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+        child: Row(
+          children: [
+            const Icon(Icons.group_add),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                '${invite.senderPub.substring(0, 8)}… invited you to a group.',
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+            TextButton(
+              onPressed: () => notifier.decline(invite),
+              child: const Text('Decline'),
+            ),
+            FilledButton(
+              onPressed: () => notifier.accept(invite),
+              child: const Text('Accept'),
+            ),
+          ],
+        ),
       ),
     );
   }
