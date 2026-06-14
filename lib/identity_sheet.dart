@@ -16,11 +16,14 @@ class IdentitySheet extends ConsumerStatefulWidget {
 
 class _IdentitySheetState extends ConsumerState<IdentitySheet> {
   final _friendCtrl = TextEditingController();
+  final _nameCtrl = TextEditingController();
+  bool _nameInit = false;
   String? _status;
 
   @override
   void dispose() {
     _friendCtrl.dispose();
+    _nameCtrl.dispose();
     super.dispose();
   }
 
@@ -28,6 +31,13 @@ class _IdentitySheetState extends ConsumerState<IdentitySheet> {
   Widget build(BuildContext context) {
     final me = ref.watch(identityProvider);
     final group = ref.watch(groupProvider);
+    // Seed the name field once from stored value; don't fight the user's typing.
+    ref.watch(myNameProvider).whenData((n) {
+      if (!_nameInit) {
+        _nameCtrl.text = n;
+        _nameInit = true;
+      }
+    });
 
     return Padding(
       padding: EdgeInsets.fromLTRB(
@@ -66,6 +76,27 @@ class _IdentitySheetState extends ConsumerState<IdentitySheet> {
                 ),
               ],
             ),
+          ),
+          const Divider(height: 24),
+          Text('Your name', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _nameCtrl,
+                  textInputAction: TextInputAction.done,
+                  decoration: const InputDecoration(
+                    hintText: 'Shown to friends on the map',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                  onSubmitted: (_) => _saveName(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(onPressed: _saveName, child: const Text('Save')),
+            ],
           ),
           const Divider(height: 24),
           group.when(
@@ -175,8 +206,16 @@ class _IdentitySheetState extends ConsumerState<IdentitySheet> {
     setState(() => _status = 'left the group');
   }
 
+  Future<void> _saveName() async {
+    await ref.read(myNameProvider.notifier).setName(_nameCtrl.text);
+    if (!mounted) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _status = 'name saved');
+  }
+
   Widget _members() {
     final members = ref.watch(membersProvider);
+    final positions = ref.watch(positionsProvider).asData?.value ?? const {};
     return members.when(
       loading: () => const SizedBox.shrink(),
       error: (e, _) => Text('members error: $e'),
@@ -193,8 +232,16 @@ class _IdentitySheetState extends ConsumerState<IdentitySheet> {
                 contentPadding: EdgeInsets.zero,
                 dense: true,
                 title: Text(
-                  '${pub.substring(0, 16)}…',
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                  positions[pub]?.name?.isNotEmpty == true
+                      ? positions[pub]!.name!
+                      : '${pub.substring(0, 16)}…',
+                  style: const TextStyle(fontSize: 13),
+                ),
+                subtitle: Text(
+                  positions[pub] != null
+                      ? 'updated ${_ago(positions[pub]!.t)}'
+                      : 'no position yet',
+                  style: const TextStyle(fontSize: 11),
                 ),
                 trailing: IconButton(
                   icon: const Icon(Icons.person_remove, color: Colors.red),
@@ -206,6 +253,16 @@ class _IdentitySheetState extends ConsumerState<IdentitySheet> {
         );
       },
     );
+  }
+
+  /// Compact relative age of a unix-seconds timestamp, e.g. "3m ago".
+  static String _ago(int unixSeconds) {
+    final d = DateTime.now()
+        .difference(DateTime.fromMillisecondsSinceEpoch(unixSeconds * 1000));
+    if (d.inSeconds < 60) return 'just now';
+    if (d.inMinutes < 60) return '${d.inMinutes}m ago';
+    if (d.inHours < 24) return '${d.inHours}h ago';
+    return '${d.inDays}d ago';
   }
 
   Future<void> _confirmRemove(String pub) async {

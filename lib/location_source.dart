@@ -60,9 +60,25 @@ class GeolocatorLocationSource implements LocationSource {
   @override
   Stream<Position> positions() async* {
     if (!await _ensurePermission()) return;
-    yield* geo.Geolocator.getPositionStream(
-      locationSettings: const geo.LocationSettings(distanceFilter: _distanceFilter),
-    ).map((p) => Position(p.latitude, p.longitude, _now()));
+    // On Android, run the fix stream under a foreground service so it keeps
+    // emitting (and we keep publishing) while the app is backgrounded. The
+    // persistent notification is the OS's price for background location.
+    // Limitation: a foreground service survives the app being backgrounded but
+    // not the user swiping it from recents — true wake-from-killed needs
+    // significant-change/geofencing, deferred. iOS background is also deferred.
+    final settings = defaultTargetPlatform == TargetPlatform.android
+        ? geo.AndroidSettings(
+            accuracy: geo.LocationAccuracy.high,
+            distanceFilter: _distanceFilter,
+            foregroundNotificationConfig: const geo.ForegroundNotificationConfig(
+              notificationTitle: 'Position',
+              notificationText: 'Sharing your location with your group',
+              enableWakeLock: true,
+            ),
+          )
+        : const geo.LocationSettings(distanceFilter: _distanceFilter);
+    yield* geo.Geolocator.getPositionStream(locationSettings: settings)
+        .map((p) => Position(p.latitude, p.longitude, _now()));
   }
 }
 

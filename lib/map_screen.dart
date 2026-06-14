@@ -130,14 +130,36 @@ class MapScreen extends ConsumerWidget {
 
   Marker _marker(String pubkey, Position p, String? mePubkey) {
     final isMe = pubkey == mePubkey;
+    final label = (p.name != null && p.name!.isNotEmpty)
+        ? p.name!
+        : (isMe ? 'me' : '${pubkey.substring(0, 6)}…');
     return Marker(
       point: LatLng(p.lat, p.lon),
-      width: 40,
-      height: 40,
-      child: Icon(
-        Icons.location_on,
-        color: isMe ? Colors.blue : Colors.deepOrange,
-        size: 40,
+      width: 120,
+      height: 56,
+      // Anchor the box bottom (pin tip) at the coordinate; label floats above.
+      alignment: Alignment.bottomCenter,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.85),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+            ),
+          ),
+          Icon(
+            Icons.location_on,
+            color: isMe ? Colors.blue : Colors.deepOrange,
+            size: 32,
+          ),
+        ],
       ),
     );
   }

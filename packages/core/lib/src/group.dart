@@ -17,7 +17,9 @@ import 'identity.dart';
 const int kPositionKind = 30078;
 const int kWrappedKeyKind = 30079;
 
-/// A position fix.
+/// A position fix. Carries the publisher's chosen display [name] so each peer
+/// labels its own dot — names travel inside the encrypted payload, never in
+/// public metadata.
 class Position {
   final double lat;
   final double lon;
@@ -25,14 +27,23 @@ class Position {
   /// Unix seconds.
   final int t;
 
-  const Position(this.lat, this.lon, this.t);
+  /// Publisher's self-chosen display name, if set.
+  final String? name;
 
-  Map<String, dynamic> toJson() => {'lat': lat, 'lon': lon, 't': t};
+  const Position(this.lat, this.lon, this.t, {this.name});
+
+  Map<String, dynamic> toJson() => {
+        'lat': lat,
+        'lon': lon,
+        't': t,
+        if (name != null && name!.isNotEmpty) 'name': name,
+      };
 
   factory Position.fromJson(Map<String, dynamic> j) => Position(
         (j['lat'] as num).toDouble(),
         (j['lon'] as num).toDouble(),
         j['t'] as int,
+        name: j['name'] as String?,
       );
 }
 

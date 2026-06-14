@@ -52,6 +52,23 @@ final ndkProvider = Provider<Ndk>((ref) {
 
 final locationSourceProvider = Provider<LocationSource>((ref) => createLocationSource());
 
+/// This device's self-chosen display name, shown to friends on their map. Empty
+/// until set. Stored locally; published inside each encrypted position payload.
+final myNameProvider = AsyncNotifierProvider<MyNameController, String>(MyNameController.new);
+
+class MyNameController extends AsyncNotifier<String> {
+  @override
+  Future<String> build() async => (await _storage.read(key: 'name')) ?? '';
+
+  Future<void> setName(String name) async {
+    final n = name.trim();
+    await _storage.write(key: 'name', value: n);
+    state = AsyncData(n);
+    // Republish so friends pick up the new name (no-op if not in a group).
+    await ref.read(publisherProvider).publishNow();
+  }
+}
+
 /// The current group session, or null if this device isn't in a group yet.
 final groupProvider = AsyncNotifierProvider<GroupController, GroupSession?>(GroupController.new);
 
@@ -186,6 +203,14 @@ final keyInboxProvider = StreamProvider<int>((ref) async* {
     try {
       final key = await GroupSession.openWrappedKey(kp, e.pubKey, e);
       final epoch = int.tryParse(GroupSession.tagValue(e, 'epoch') ?? '1') ?? 1;
+      // Trust-on-first-use: the first key (we're not in a group yet) is from
+      // whoever added us — adopt it. After that, only a sender already in our
+      // roster may hand us a new key, so a stranger can't push a higher-epoch
+      // key to hijack our session. (Anyone can encrypt to our public key, so the
+      // decrypt succeeding above is not by itself proof of trust.)
+      final inGroup = ref.read(groupProvider).asData?.value != null;
+      final known = ref.read(membersProvider).asData?.value ?? const [];
+      if (inGroup && !known.contains(e.pubKey)) continue;
       await ref.read(groupProvider.notifier).adopt(key, epoch);
       await ref.read(membersProvider.notifier).add(e.pubKey);
       yield ++adopted;
@@ -230,12 +255,15 @@ class Publisher {
   Publisher(this.ref);
 
   /// Publish a specific fix. False if there's no group or no relay accepted it.
+  /// Stamps our self-chosen display name into the (encrypted) payload.
   Future<bool> publish(Position fix) async {
     final group = ref.read(groupProvider).asData?.value;
     if (group == null) return false;
     final kp = await ref.read(identityProvider.future);
     final ndk = ref.read(ndkProvider);
-    final acks = await _publish(ndk, await group.buildPositionEvent(kp, fix));
+    final name = ref.read(myNameProvider).asData?.value ?? '';
+    final stamped = Position(fix.lat, fix.lon, fix.t, name: name.isEmpty ? null : name);
+    final acks = await _publish(ndk, await group.buildPositionEvent(kp, stamped));
     return acks > 0;
   }
 
