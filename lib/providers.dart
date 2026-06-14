@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:position_core/position_core.dart';
 
+import 'background_task.dart';
 import 'location_source.dart';
 import 'log.dart';
 
@@ -334,14 +335,25 @@ class SharingController extends Notifier<bool> {
     if (state) return;
     state = true;
     final publisher = ref.read(publisherProvider);
-    _sub = ref.read(locationSourceProvider).positions().listen(publisher.publish);
-    _heartbeat = Timer.periodic(_heartbeatInterval, (_) => publisher.publishNow());
-    publisher.publishNow();
+    final src = ref.read(locationSourceProvider);
+    if (src is ManualLocationSource) {
+      // Web/desktop: publish manual moves plus a heartbeat. No background isolate.
+      _sub = src.positions().listen(publisher.publish);
+      _heartbeat = Timer.periodic(_heartbeatInterval, (_) => publisher.publishNow());
+      publisher.publishNow();
+    } else {
+      // Mobile: publish once now for an immediate dot, then a single background
+      // service publishes on movement — covering foreground, background, and the
+      // app being killed (no second foreground stream, to avoid double-publishing).
+      publisher.publishNow();
+      startBackgroundPublishing();
+    }
     ref.read(logProvider.notifier).add('live sharing on');
   }
 
   void stop() {
     _stop();
+    stopBackgroundPublishing();
     state = false;
     ref.read(logProvider.notifier).add('live sharing off');
   }
