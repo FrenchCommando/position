@@ -1,0 +1,205 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+
+import 'providers.dart';
+
+/// Bottom sheet for identity + group management: show my key (text + QR for
+/// in-person exchange), create a group, and invite a friend by their pubkey.
+class IdentitySheet extends ConsumerStatefulWidget {
+  const IdentitySheet({super.key});
+
+  @override
+  ConsumerState<IdentitySheet> createState() => _IdentitySheetState();
+}
+
+class _IdentitySheetState extends ConsumerState<IdentitySheet> {
+  final _friendCtrl = TextEditingController();
+  String? _status;
+
+  @override
+  void dispose() {
+    _friendCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final me = ref.watch(identityProvider);
+    final group = ref.watch(groupProvider);
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        16,
+        16,
+        16,
+        16 + MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Your key', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          me.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (e, _) => Text('identity error: $e'),
+            data: (kp) => Column(
+              children: [
+                Center(
+                  child: QrImageView(data: kp.publicKey, size: 160),
+                ),
+                const SizedBox(height: 8),
+                SelectableText(
+                  kp.publicKey,
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                  textAlign: TextAlign.center,
+                ),
+                TextButton.icon(
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: kp.publicKey));
+                    setState(() => _status = 'key copied');
+                  },
+                  icon: const Icon(Icons.copy, size: 16),
+                  label: const Text('Copy key'),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 24),
+          group.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (e, _) => Text('group error: $e'),
+            data: (g) => g == null ? _noGroup() : _inGroup(),
+          ),
+          if (_status != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(_status!, style: const TextStyle(color: Colors.green)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _noGroup() => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            "You're not in a group yet. Create one, or share your key above "
+            "with a friend who'll add you — the group key then arrives here automatically.",
+          ),
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: () async {
+              await ref.read(groupProvider.notifier).createGroup();
+              setState(() => _status = 'group created — now add a friend');
+            },
+            icon: const Icon(Icons.group_add),
+            label: const Text('Create group'),
+          ),
+        ],
+      );
+
+  static final _hex64 = RegExp(r'^[0-9a-fA-F]{64}$');
+  bool get _validFriendKey => _hex64.hasMatch(_friendCtrl.text.trim());
+
+  Widget _inGroup() => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Add a friend', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          const Text(
+            'Your friend shares their key with you (their Copy button or QR). '
+            'Paste it here to give them the group key.',
+            style: TextStyle(fontSize: 13),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _friendCtrl,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(
+              labelText: "Paste your friend's key",
+              border: OutlineInputBorder(),
+            ),
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          FilledButton.icon(
+            onPressed: _validFriendKey
+                ? () async {
+                    try {
+                      await ref.read(groupProvider.notifier).addFriend(_friendCtrl.text.trim());
+                      _friendCtrl.clear();
+                      setState(() => _status = 'added — they get the group key on next connect');
+                    } catch (e) {
+                      setState(() => _status = 'failed: $e');
+                    }
+                  }
+                : null,
+            icon: const Icon(Icons.person_add),
+            label: const Text('Add to group'),
+          ),
+          const SizedBox(height: 16),
+          _members(),
+        ],
+      );
+
+  Widget _members() {
+    final members = ref.watch(membersProvider);
+    return members.when(
+      loading: () => const SizedBox.shrink(),
+      error: (e, _) => Text('members error: $e'),
+      data: (list) {
+        if (list.isEmpty) {
+          return const Text('No members yet.', style: TextStyle(fontSize: 13));
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Members', style: Theme.of(context).textTheme.titleMedium),
+            for (final pub in list)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Text(
+                  '${pub.substring(0, 16)}…',
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                ),
+                trailing: IconButton(
+                  icon: const Icon(Icons.person_remove, color: Colors.red),
+                  tooltip: 'Remove (re-keys the group)',
+                  onPressed: () => _confirmRemove(pub),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _confirmRemove(String pub) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove member?'),
+        content: Text(
+          'This mints a new group key for everyone else. '
+          '${pub.substring(0, 16)}… can no longer see the group.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await ref.read(groupProvider.notifier).removeMember(pub);
+      setState(() => _status = 'removed — group re-keyed; others get the new key on next connect');
+    } catch (e) {
+      setState(() => _status = 'remove failed: $e');
+    }
+  }
+}
