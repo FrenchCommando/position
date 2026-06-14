@@ -10,7 +10,7 @@ Running engineering log. Design rationale lives in [VISION.md](VISION.md).
 - **Names** — each device sets its own display name; it rides inside the *encrypted* position payload (never public metadata) and labels that person's dot + roster row.
 - **Map** — OSM tiles via `flutter_map`. Friends' dots come from the relay; your own dot is shown locally on web (manual source) before/without publishing. Recenter FAB fits everyone. Names label dots; last-updated time appears in the roster only.
 - **Logs tab** — in-memory activity log (publishes + ack counts, key adoptions, positions received, invites, re-keys, errors). Newest-first, capped 300, clearable. Built to answer "is it reaching a relay?".
-- **Background publishing (Android)** — `background_locator_2`: movement-triggered (15 m), survives backgrounding *and* swipe-kill. The killed app's only job is the headless publish in `background_publish.dart` (read keys from storage → encrypt → broadcast → disconnect). Foreground/web sharing uses the manual/foreground path, not the background isolate, so there's no double-publishing.
+- **Background publishing (Android)** — `flutter_background_service`: a sticky location foreground service (`background_task.dart`) runs geolocator's movement stream (15 m) and publishes each fix, surviving backgrounding and swipe-kill (Android restarts the service). Each publish runs the headless path in `background_publish.dart` (read keys from storage → encrypt → broadcast → disconnect). Configured once in `main()`; started/stopped with live sharing. Foreground/web sharing uses the manual/foreground path, not the service, so there's no double-publishing.
 
 ## Deploy — direct phone install
 - CI builds a **release** APK. It's debug-signed (`android/app/build.gradle.kts`), so it installs like the debug build but is ~15 MB instead of ~100 MB.
@@ -23,7 +23,7 @@ Running engineering log. Design rationale lives in [VISION.md](VISION.md).
 - Regenerate: `tool/generate_icon.bat` (Windows) or `tool/generate_icon.sh` (Unix). Config under `flutter_launcher_icons:` in `pubspec.yaml`.
 
 ## Gotchas / known limits
-- **`background_locator_2` is an older plugin.** If it fails to compile with the current AGP/Gradle, CI's APK build fails and no release publishes — that's the signal (validated by CI, not built locally).
+- **The Android build is validated by CI, not locally.** (We switched off `background_locator_2`, which was unmaintained and failed AGP 8 with a missing `namespace`, to the maintained `flutter_background_service`.) If the native build breaks, CI's APK step fails and no release publishes — that's the signal.
 - **"Allow all the time" location permission is required** for background publishing. The app only requests while-in-use, so grant background access manually in Android settings.
 - **iOS background is unvalidated** (no Apple device).
 - **`packages/core/build/` was untracked** from git; `**/build/` added to `.gitignore` so sub-package build output can't be committed again.

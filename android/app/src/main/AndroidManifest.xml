@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- Relay websockets + OpenStreetMap tiles -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- geolocator: real position fixes -->
@@ -8,9 +9,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
-    <!-- background_locator_2: publish on movement even when the app is killed.
-         Requires the user to grant "Allow all the time" location access. -->
+    <!-- Publish on movement even when the app is backgrounded/killed, via
+         flutter_background_service. Background location needs the user to grant
+         "Allow all the time"; POST_NOTIFICATIONS is for the service notification. -->
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="Position"
         android:name="${applicationName}"
@@ -42,12 +45,12 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
-        <!-- background_locator_2 background isolate host -->
+        <!-- flutter_background_service's service runs as a location foreground
+             service; Android 14+ requires the type be declared in the manifest. -->
         <service
-            android:name="yukams.app.background_locator_2.IsolateHolderService"
-            android:permission="android.permission.FOREGROUND_SERVICE"
-            android:exported="true"
-            android:foregroundServiceType="location" />
+            android:name="id.flutter.flutter_background_service.BackgroundService"
+            android:foregroundServiceType="location"
+            tools:node="merge" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

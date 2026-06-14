@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'background_task.dart';
 import 'log_screen.dart';
 import 'map_screen.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await configureBackgroundService();
   runApp(const ProviderScope(child: PositionApp()));
 }
 

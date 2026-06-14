@@ -1,58 +1,62 @@
-import 'package:background_locator_2/background_locator.dart';
-import 'package:background_locator_2/location_dto.dart';
-import 'package:background_locator_2/settings/android_settings.dart';
-import 'package:background_locator_2/settings/locator_settings.dart';
+import 'dart:async';
+import 'dart:ui' show DartPluginRegistrant;
+
 import 'package:flutter/foundation.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:geolocator/geolocator.dart' as geo;
 
 import 'background_publish.dart';
 
 bool get _supported => !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
-/// Fired by background_locator_2 in its own isolate whenever the device moves
-/// past the distance filter — even with the app backgrounded or killed. The
-/// only thing the killed app does: publish this fix, then go back to sleep.
+/// The background isolate entrypoint. Runs geolocator's movement stream and
+/// publishes each fix — alive while the app is foreground, backgrounded, or
+/// killed (a sticky foreground service Android restarts after task removal).
 @pragma('vm:entry-point')
-Future<void> backgroundLocationCallback(LocationDto loc) async {
-  await publishFixInBackground(loc.latitude, loc.longitude);
+void onBackgroundStart(ServiceInstance service) async {
+  DartPluginRegistrant.ensureInitialized();
+
+  StreamSubscription<geo.Position>? sub;
+  service.on('stop').listen((_) async {
+    await sub?.cancel();
+    await service.stopSelf();
+  });
+
+  // Publish on movement (15 m). The killed app does nothing else.
+  sub = geo.Geolocator.getPositionStream(
+    locationSettings: const geo.LocationSettings(distanceFilter: 15),
+  ).listen((p) => publishFixInBackground(p.latitude, p.longitude));
 }
 
-@pragma('vm:entry-point')
-void backgroundInitCallback(Map<String, dynamic> _) {}
+/// Register the background service. Call once from main(); no-op off Android.
+/// `autoStart: false` — we only run it while live sharing is on.
+Future<void> configureBackgroundService() async {
+  if (!_supported) return;
+  await FlutterBackgroundService().configure(
+    androidConfiguration: AndroidConfiguration(
+      onStart: onBackgroundStart,
+      autoStart: false,
+      autoStartOnBoot: true,
+      isForegroundMode: true,
+      initialNotificationTitle: 'Position',
+      initialNotificationContent: 'Sharing your location with your group',
+      foregroundServiceTypes: const [AndroidForegroundType.location],
+    ),
+    iosConfiguration: IosConfiguration(autoStart: false),
+  );
+}
 
-@pragma('vm:entry-point')
-void backgroundDisposeCallback() {}
-
-/// Start movement-triggered background publishing. Android only and idempotent;
-/// a no-op elsewhere. Needs the user to have granted "Allow all the time".
+/// Start movement-triggered background publishing. No-op off Android / if running.
 Future<void> startBackgroundPublishing() async {
   if (!_supported) return;
-  if (await BackgroundLocator.isRegisterLocationUpdate()) return;
-  await BackgroundLocator.initialize();
-  await BackgroundLocator.registerLocationUpdate(
-    backgroundLocationCallback,
-    initCallback: backgroundInitCallback,
-    disposeCallback: backgroundDisposeCallback,
-    autoStop: false,
-    androidSettings: const AndroidSettings(
-      accuracy: LocationAccuracy.NAVIGATION,
-      interval: 10,
-      distanceFilter: 15, // metres of movement before we publish again
-      client: LocationClient.android,
-      androidNotificationSettings: AndroidNotificationSettings(
-        notificationChannelName: 'Position',
-        notificationTitle: 'Position',
-        notificationMsg: 'Sharing your location with your group',
-        notificationBigMsg:
-            'Position publishes your location to your group as you move, even when the app is closed.',
-      ),
-    ),
-  );
+  final service = FlutterBackgroundService();
+  if (await service.isRunning()) return;
+  await service.startService();
 }
 
 /// Stop background publishing. No-op if not running / unsupported.
 Future<void> stopBackgroundPublishing() async {
   if (!_supported) return;
-  if (await BackgroundLocator.isRegisterLocationUpdate()) {
-    await BackgroundLocator.unRegisterLocationUpdate();
-  }
+  final service = FlutterBackgroundService();
+  if (await service.isRunning()) service.invoke('stop');
 }
