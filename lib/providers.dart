@@ -321,7 +321,11 @@ final sharingProvider = NotifierProvider<SharingController, bool>(SharingControl
 class SharingController extends Notifier<bool> {
   StreamSubscription<Position>? _sub;
   Timer? _heartbeat;
+  Timer? _debounce;
   static const _heartbeatInterval = Duration(minutes: 2);
+  // Collapse a burst of moves (dragging the pin) into one publish once it
+  // settles — otherwise relays rate-limit us ("you are noting too much").
+  static const _moveDebounce = Duration(seconds: 1);
 
   @override
   bool build() {
@@ -338,7 +342,11 @@ class SharingController extends Notifier<bool> {
     final src = ref.read(locationSourceProvider);
     if (src is ManualLocationSource) {
       // Web/desktop: publish manual moves plus a heartbeat. No background isolate.
-      _sub = src.positions().listen(publisher.publish);
+      // Debounce moves so a drag publishes once it settles, not per frame.
+      _sub = src.positions().listen((fix) {
+        _debounce?.cancel();
+        _debounce = Timer(_moveDebounce, () => publisher.publish(fix));
+      });
       _heartbeat = Timer.periodic(_heartbeatInterval, (_) => publisher.publishNow());
       publisher.publishNow();
     } else {
@@ -363,5 +371,7 @@ class SharingController extends Notifier<bool> {
     _sub = null;
     _heartbeat?.cancel();
     _heartbeat = null;
+    _debounce?.cancel();
+    _debounce = null;
   }
 }

@@ -214,6 +214,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       alignment: Alignment.bottomCenter,
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.end,
         children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
