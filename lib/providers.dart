@@ -56,14 +56,8 @@ final locationSourceProvider = Provider<LocationSource>((ref) => createLocationS
 final groupProvider = AsyncNotifierProvider<GroupController, GroupSession?>(GroupController.new);
 
 class GroupController extends AsyncNotifier<GroupSession?> {
-  /// True while this is a group we created ourselves and haven't hosted yet (no
-  /// friend added). A provisional group is replaceable by an inviter's key at
-  /// the same epoch — that's how a "we both tapped Create" fork converges.
-  bool _provisional = false;
-
   @override
   Future<GroupSession?> build() async {
-    _provisional = (await _storage.read(key: 'groupprovisional')) == 'true';
     final keyHex = await _storage.read(key: 'groupkey');
     if (keyHex == null) return null;
     final epoch = int.tryParse(await _storage.read(key: 'groupepoch') ?? '1') ?? 1;
@@ -76,29 +70,24 @@ class GroupController extends AsyncNotifier<GroupSession?> {
 
   Future<void> createGroup() async {
     final s = GroupSession.create(_groupId);
-    _provisional = true;
     await _persist(s);
     state = AsyncData(s);
   }
 
-  /// Adopt a group key unwrapped from a member's wrapped-key event. A newer
-  /// epoch always wins (a re-key). The *same* epoch wins only if our current
-  /// group is a provisional self-created one — the both-tapped-Create fork, where
-  /// the inviter's key takes over so the two sides converge. Otherwise it's a
-  /// stale or already-known key and we keep ours (no rollback).
+  /// Adopt a group key unwrapped from a member's wrapped-key event. Epoch-guarded
+  /// so a stale or already-known key can't roll a re-key back. (Convention: one
+  /// person creates the group; everyone else joins by being added — so a joiner's
+  /// epoch is 0 and adoption goes through.)
   Future<void> adopt(Uint8List key, int epoch) async {
     final current = state.asData?.value?.epoch ?? 0;
-    if (epoch > current || (epoch == current && _provisional)) {
-      final s = GroupSession(groupId: _groupId, epoch: epoch, groupKey: key);
-      _provisional = false;
-      await _persist(s);
-      state = AsyncData(s);
-    }
+    if (epoch <= current) return;
+    final s = GroupSession(groupId: _groupId, epoch: epoch, groupKey: key);
+    await _persist(s);
+    state = AsyncData(s);
   }
 
   /// Invite a friend by wrapping the current group key to their pubkey and
-  /// publishing it; they adopt it on their next connect. Hosting commits us to
-  /// our key (no longer provisional).
+  /// publishing it; they adopt it on their next connect.
   Future<void> addFriend(String friendPubHex) async {
     final s = state.asData?.value;
     if (s == null) throw StateError('not in a group yet');
@@ -108,18 +97,14 @@ class GroupController extends AsyncNotifier<GroupSession?> {
     if (acks == 0) {
       throw StateError('no relay accepted the invite — check your connection');
     }
-    _provisional = false;
-    await _persist(s);
     await ref.read(membersProvider.notifier).add(friendPubHex);
   }
 
-  /// Leave the group: drop our key and roster. Use this to recover from a fork
-  /// (we both created a group) — leave, then get added by the other person.
+  /// Leave the group: drop our key and roster. Recovery for a fork (you both
+  /// created a group) — leave, then get added by the other person.
   Future<void> leaveGroup() async {
     await _storage.delete(key: 'groupkey');
     await _storage.delete(key: 'groupepoch');
-    await _storage.delete(key: 'groupprovisional');
-    _provisional = false;
     await ref.read(membersProvider.notifier).clear();
     state = const AsyncData(null);
   }
@@ -145,7 +130,6 @@ class GroupController extends AsyncNotifier<GroupSession?> {
   Future<void> _persist(GroupSession s) async {
     await _storage.write(key: 'groupkey', value: hex.encode(s.groupKey));
     await _storage.write(key: 'groupepoch', value: '${s.epoch}');
-    await _storage.write(key: 'groupprovisional', value: '$_provisional');
   }
 }
 
