@@ -8,6 +8,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:position_core/position_core.dart';
 
 import 'location_source.dart';
+import 'log.dart';
 
 const _storage = FlutterSecureStorage();
 const _groupId = 'friends';
@@ -30,6 +31,10 @@ Future<int> _publish(Ndk ndk, Nip01Event event) async {
   return acks.where((r) => r.broadcastSuccessful).length;
 }
 
+/// Short pubkey for log/UI lines.
+String _short(String pubHex) =>
+    pubHex.length <= 8 ? pubHex : '${pubHex.substring(0, 8)}…';
+
 /// This device's identity keypair — loaded from secure storage, generated and
 /// persisted on first run. The private key never leaves the device.
 final identityProvider = FutureProvider<KeyPair>((ref) async {
@@ -51,6 +56,20 @@ final ndkProvider = Provider<Ndk>((ref) {
 });
 
 final locationSourceProvider = Provider<LocationSource>((ref) => createLocationSource());
+
+/// This device's own current location, shown locally so you see your own dot
+/// without having to publish or even be in a group. Manual/web source only —
+/// it's free there; on mobile we don't spin up GPS just to view (yields null),
+/// so your dot appears once you start sharing.
+final myLocalPositionProvider = StreamProvider<Position?>((ref) async* {
+  final src = ref.read(locationSourceProvider);
+  if (src is! ManualLocationSource) {
+    yield null;
+    return;
+  }
+  yield await src.current();
+  yield* src.positions();
+});
 
 /// This device's self-chosen display name, shown to friends on their map. Empty
 /// until set. Stored locally; published inside each encrypted position payload.
@@ -89,6 +108,7 @@ class GroupController extends AsyncNotifier<GroupSession?> {
     final s = GroupSession.create(_groupId);
     await _persist(s);
     state = AsyncData(s);
+    ref.read(logProvider.notifier).add('created group (epoch ${s.epoch})');
   }
 
   /// Adopt a group key unwrapped from a member's wrapped-key event. Epoch-guarded
@@ -112,9 +132,11 @@ class GroupController extends AsyncNotifier<GroupSession?> {
     final ndk = ref.read(ndkProvider);
     final acks = await _publish(ndk, await s.buildWrappedKeyEvent(kp, friendPubHex));
     if (acks == 0) {
+      ref.read(logProvider.notifier).add('invite failed: no relay accepted', level: LogLevel.error);
       throw StateError('no relay accepted the invite — check your connection');
     }
     await ref.read(membersProvider.notifier).add(friendPubHex);
+    ref.read(logProvider.notifier).add('invited ${_short(friendPubHex)} → $acks relay(s)');
   }
 
   /// Leave the group: drop our key and roster. Recovery for a fork (you both
@@ -124,6 +146,7 @@ class GroupController extends AsyncNotifier<GroupSession?> {
     await _storage.delete(key: 'groupepoch');
     await ref.read(membersProvider.notifier).clear();
     state = const AsyncData(null);
+    ref.read(logProvider.notifier).add('left the group');
   }
 
   /// Remove a member: mint a new key at the next epoch and wrap it to everyone
@@ -142,6 +165,8 @@ class GroupController extends AsyncNotifier<GroupSession?> {
     await _persist(next);
     await ref.read(membersProvider.notifier).remove(pubHex);
     state = AsyncData(next);
+    ref.read(logProvider.notifier)
+        .add('removed ${_short(pubHex)} — re-keyed to epoch ${next.epoch}');
   }
 
   Future<void> _persist(GroupSession s) async {
@@ -210,9 +235,15 @@ final keyInboxProvider = StreamProvider<int>((ref) async* {
       // decrypt succeeding above is not by itself proof of trust.)
       final inGroup = ref.read(groupProvider).asData?.value != null;
       final known = ref.read(membersProvider).asData?.value ?? const [];
-      if (inGroup && !known.contains(e.pubKey)) continue;
+      if (inGroup && !known.contains(e.pubKey)) {
+        ref.read(logProvider.notifier).add(
+            'ignored key from unknown ${_short(e.pubKey)}', level: LogLevel.warn);
+        continue;
+      }
       await ref.read(groupProvider.notifier).adopt(key, epoch);
       await ref.read(membersProvider.notifier).add(e.pubKey);
+      ref.read(logProvider.notifier)
+          .add('adopted group key (epoch $epoch) from ${_short(e.pubKey)}');
       yield ++adopted;
     } catch (_) {
       // Not wrapped to us / not decryptable — ignore.
@@ -238,8 +269,11 @@ final positionsProvider = StreamProvider<Map<String, Position>>((ref) async* {
   final latest = <String, Position>{};
   await for (final e in resp.stream) {
     try {
-      latest[e.pubKey] = await group.decodePositionEvent(e);
+      final p = await group.decodePositionEvent(e);
+      latest[e.pubKey] = p;
       await ref.read(membersProvider.notifier).add(e.pubKey);
+      ref.read(logProvider.notifier)
+          .add('position from ${p.name?.isNotEmpty == true ? p.name : _short(e.pubKey)}');
       yield Map<String, Position>.from(latest);
     } catch (_) {
       // Not decryptable with our key (other group / wrong epoch) — skip.
@@ -264,6 +298,10 @@ class Publisher {
     final name = ref.read(myNameProvider).asData?.value ?? '';
     final stamped = Position(fix.lat, fix.lon, fix.t, name: name.isEmpty ? null : name);
     final acks = await _publish(ndk, await group.buildPositionEvent(kp, stamped));
+    ref.read(logProvider.notifier).add(
+          acks > 0 ? 'published position → $acks relay(s)' : 'publish failed: no relay accepted',
+          level: acks > 0 ? LogLevel.info : LogLevel.error,
+        );
     return acks > 0;
   }
 
@@ -299,11 +337,13 @@ class SharingController extends Notifier<bool> {
     _sub = ref.read(locationSourceProvider).positions().listen(publisher.publish);
     _heartbeat = Timer.periodic(_heartbeatInterval, (_) => publisher.publishNow());
     publisher.publishNow();
+    ref.read(logProvider.notifier).add('live sharing on');
   }
 
   void stop() {
     _stop();
     state = false;
+    ref.read(logProvider.notifier).add('live sharing off');
   }
 
   void _stop() {

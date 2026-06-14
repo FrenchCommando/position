@@ -31,6 +31,18 @@ void main() {
       expect(GroupSession.tagValue(event, 'd'), 'friends');
     });
 
+    test('the publisher display name round-trips inside the payload', () async {
+      final alice = generateKeyPair();
+      final session = GroupSession.create('friends');
+      final event = await session.buildPositionEvent(
+        alice,
+        const Position(48.8566, 2.3522, 100, name: 'Alice'),
+      );
+      // Name lives in the encrypted content, never in public tags/metadata.
+      expect(event.content.contains('Alice'), isFalse);
+      expect((await session.decodePositionEvent(event)).name, 'Alice');
+    });
+
     test('a different group key cannot decrypt the position', () async {
       final alice = generateKeyPair();
       final session = GroupSession.create('friends');

@@ -29,6 +29,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   void _recenter() {
     final positions = ref.read(positionsProvider).asData?.value ?? const {};
     final points = positions.values.map((p) => LatLng(p.lat, p.lon)).toList();
+    final local = ref.read(myLocalPositionProvider).asData?.value;
+    if (local != null) points.add(LatLng(local.lat, local.lon));
     if (points.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No positions yet.')),
@@ -52,6 +54,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final positions = ref.watch(positionsProvider);
     final group = ref.watch(groupProvider);
     final sharing = ref.watch(sharingProvider);
+    final localMe = ref.watch(myLocalPositionProvider).asData?.value;
     // Activate adoption of group keys wrapped to us by inviters.
     ref.watch(keyInboxProvider);
 
@@ -122,10 +125,11 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 userAgentPackageName: 'io.github.frenchcommando.position',
               ),
               MarkerLayer(
-                markers: [
-                  for (final entry in (positions.asData?.value ?? const {}).entries)
-                    _marker(entry.key, entry.value, me.asData?.value.publicKey),
-                ],
+                markers: _buildMarkers(
+                  positions.asData?.value ?? const {},
+                  me.asData?.value.publicKey,
+                  localMe,
+                ),
               ),
             ],
           ),
@@ -176,6 +180,25 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         ],
       ),
     );
+  }
+
+  /// Friends' dots from the relay, plus my own dot — preferring my instant local
+  /// fix (web) over the relay echo, so I see myself before/without publishing.
+  List<Marker> _buildMarkers(
+    Map<String, Position> relay,
+    String? mePub,
+    Position? localMe,
+  ) {
+    final markers = <Marker>[];
+    for (final entry in relay.entries) {
+      if (entry.key == mePub) continue; // my own dot handled below
+      markers.add(_marker(entry.key, entry.value, mePub));
+    }
+    final mine = localMe ?? (mePub != null ? relay[mePub] : null);
+    if (mine != null && mePub != null) {
+      markers.add(_marker(mePub, mine, mePub));
+    }
+    return markers;
   }
 
   Marker _marker(String pubkey, Position p, String? mePubkey) {
