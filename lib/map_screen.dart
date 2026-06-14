@@ -8,11 +8,46 @@ import 'identity_sheet.dart';
 import 'location_source.dart';
 import 'providers.dart';
 
-class MapScreen extends ConsumerWidget {
+class MapScreen extends ConsumerStatefulWidget {
   const MapScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MapScreen> createState() => _MapScreenState();
+}
+
+class _MapScreenState extends ConsumerState<MapScreen> {
+  final _mapController = MapController();
+
+  @override
+  void dispose() {
+    _mapController.dispose();
+    super.dispose();
+  }
+
+  /// Frame everyone: center on the single known dot, or fit the camera to all of
+  /// them. No-op with a hint when nothing has been received yet.
+  void _recenter() {
+    final positions = ref.read(positionsProvider).asData?.value ?? const {};
+    final points = positions.values.map((p) => LatLng(p.lat, p.lon)).toList();
+    if (points.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No positions yet.')),
+      );
+      return;
+    }
+    if (points.length == 1) {
+      _mapController.move(points.first, 15);
+      return;
+    }
+    _mapController.fitCamera(CameraFit.coordinates(
+      coordinates: points,
+      padding: const EdgeInsets.all(48),
+      maxZoom: 16,
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final me = ref.watch(identityProvider);
     final positions = ref.watch(positionsProvider);
     final group = ref.watch(groupProvider);
@@ -52,6 +87,7 @@ class MapScreen extends ConsumerWidget {
       body: Stack(
         children: [
           FlutterMap(
+            mapController: _mapController,
             options: MapOptions(
               initialCenter: const LatLng(48.8566, 2.3522),
               initialZoom: 12,
@@ -109,21 +145,35 @@ class MapScreen extends ConsumerWidget {
             ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: sharing ? Colors.blue : null,
-        foregroundColor: sharing ? Colors.white : null,
-        onPressed: () {
-          final messenger = ScaffoldMessenger.of(context);
-          if (!sharing && ref.read(groupProvider).asData?.value == null) {
-            messenger.showSnackBar(const SnackBar(
-              content: Text('Create or join a group first (tap the people icon).'),
-            ));
-            return;
-          }
-          ref.read(sharingProvider.notifier).toggle();
-        },
-        icon: Icon(sharing ? Icons.location_on : Icons.location_off),
-        label: Text(sharing ? 'Sharing live' : 'Share live'),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          FloatingActionButton.small(
+            heroTag: 'recenter',
+            tooltip: 'Center on everyone',
+            onPressed: _recenter,
+            child: const Icon(Icons.my_location),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton.extended(
+            heroTag: 'sharetoggle',
+            backgroundColor: sharing ? Colors.blue : null,
+            foregroundColor: sharing ? Colors.white : null,
+            onPressed: () {
+              final messenger = ScaffoldMessenger.of(context);
+              if (!sharing && ref.read(groupProvider).asData?.value == null) {
+                messenger.showSnackBar(const SnackBar(
+                  content: Text('Create or join a group first (tap the people icon).'),
+                ));
+                return;
+              }
+              ref.read(sharingProvider.notifier).toggle();
+            },
+            icon: Icon(sharing ? Icons.location_on : Icons.location_off),
+            label: Text(sharing ? 'Sharing live' : 'Share live'),
+          ),
+        ],
       ),
     );
   }
