@@ -31,6 +31,8 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+# Build output in workspace sub-packages (e.g. packages/core/build/)
+**/build/
 /coverage/
 
 # Symbolication related
