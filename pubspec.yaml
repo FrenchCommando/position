@@ -54,6 +54,17 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+# App launcher icon — regenerate with tool/generate_icon.{sh,bat} after editing
+# assets/app_icon.svg. Targets match the project: Android, iOS, web.
+flutter_launcher_icons:
+  android: true
+  ios: true
+  web:
+    generate: true
+  remove_alpha_ios: true
+  image_path: "assets/app_icon.png"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

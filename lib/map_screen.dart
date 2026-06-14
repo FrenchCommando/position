@@ -66,10 +66,16 @@ class MapScreen extends ConsumerWidget {
                 src.set(latlng.latitude, latlng.longitude);
                 if (ref.read(sharingProvider)) return;
                 final messenger = ScaffoldMessenger.of(context);
+                if (ref.read(groupProvider).asData?.value == null) {
+                  messenger.showSnackBar(const SnackBar(
+                    content: Text('Create or join a group first (tap the people icon).'),
+                  ));
+                  return;
+                }
                 final ok = await ref.read(publisherProvider).publishNow();
                 if (!ok) {
                   messenger.showSnackBar(const SnackBar(
-                    content: Text('Create or join a group first (tap the people icon).'),
+                    content: Text('Could not reach any relay — check your connection.'),
                   ));
                 }
               },

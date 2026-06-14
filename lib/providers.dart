@@ -11,7 +11,24 @@ import 'location_source.dart';
 
 const _storage = FlutterSecureStorage();
 const _groupId = 'friends';
-const _relayUrl = 'wss://relay.damus.io';
+
+/// Publish to and read from several relays so no single one is load-bearing
+/// (VISION: redundancy over reliability — public relays are best-effort).
+const _relays = [
+  'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+  'wss://offchain.pub',
+];
+
+/// Broadcast an event and wait for relay confirmation. Returns how many relays
+/// accepted it; 0 means it never landed anywhere and the caller should surface
+/// that rather than report success.
+Future<int> _publish(Ndk ndk, Nip01Event event) async {
+  final resp = ndk.broadcast.broadcast(nostrEvent: event);
+  final acks = await resp.broadcastDoneFuture;
+  return acks.where((r) => r.broadcastSuccessful).length;
+}
 
 /// This device's identity keypair — loaded from secure storage, generated and
 /// persisted on first run. The private key never leaves the device.
@@ -29,7 +46,7 @@ final ndkProvider = Provider<Ndk>((ref) {
   return Ndk(NdkConfig(
     eventVerifier: Bip340EventVerifier(),
     cache: MemCacheManager(),
-    bootstrapRelays: const [_relayUrl],
+    bootstrapRelays: _relays,
   ));
 });
 
@@ -39,8 +56,14 @@ final locationSourceProvider = Provider<LocationSource>((ref) => createLocationS
 final groupProvider = AsyncNotifierProvider<GroupController, GroupSession?>(GroupController.new);
 
 class GroupController extends AsyncNotifier<GroupSession?> {
+  /// True while this is a group we created ourselves and haven't hosted yet (no
+  /// friend added). A provisional group is replaceable by an inviter's key at
+  /// the same epoch — that's how a "we both tapped Create" fork converges.
+  bool _provisional = false;
+
   @override
   Future<GroupSession?> build() async {
+    _provisional = (await _storage.read(key: 'groupprovisional')) == 'true';
     final keyHex = await _storage.read(key: 'groupkey');
     if (keyHex == null) return null;
     final epoch = int.tryParse(await _storage.read(key: 'groupepoch') ?? '1') ?? 1;
@@ -53,29 +76,52 @@ class GroupController extends AsyncNotifier<GroupSession?> {
 
   Future<void> createGroup() async {
     final s = GroupSession.create(_groupId);
+    _provisional = true;
     await _persist(s);
     state = AsyncData(s);
   }
 
-  /// Adopt a group key unwrapped from a member's wrapped-key event. Epoch-guarded
-  /// so a stale or already-known key can't roll a re-key back.
+  /// Adopt a group key unwrapped from a member's wrapped-key event. A newer
+  /// epoch always wins (a re-key). The *same* epoch wins only if our current
+  /// group is a provisional self-created one — the both-tapped-Create fork, where
+  /// the inviter's key takes over so the two sides converge. Otherwise it's a
+  /// stale or already-known key and we keep ours (no rollback).
   Future<void> adopt(Uint8List key, int epoch) async {
     final current = state.asData?.value?.epoch ?? 0;
-    if (epoch <= current) return;
-    final s = GroupSession(groupId: _groupId, epoch: epoch, groupKey: key);
-    await _persist(s);
-    state = AsyncData(s);
+    if (epoch > current || (epoch == current && _provisional)) {
+      final s = GroupSession(groupId: _groupId, epoch: epoch, groupKey: key);
+      _provisional = false;
+      await _persist(s);
+      state = AsyncData(s);
+    }
   }
 
   /// Invite a friend by wrapping the current group key to their pubkey and
-  /// publishing it; they adopt it on their next connect.
+  /// publishing it; they adopt it on their next connect. Hosting commits us to
+  /// our key (no longer provisional).
   Future<void> addFriend(String friendPubHex) async {
     final s = state.asData?.value;
     if (s == null) throw StateError('not in a group yet');
     final kp = await ref.read(identityProvider.future);
     final ndk = ref.read(ndkProvider);
-    ndk.broadcast.broadcast(nostrEvent: await s.buildWrappedKeyEvent(kp, friendPubHex));
+    final acks = await _publish(ndk, await s.buildWrappedKeyEvent(kp, friendPubHex));
+    if (acks == 0) {
+      throw StateError('no relay accepted the invite — check your connection');
+    }
+    _provisional = false;
+    await _persist(s);
     await ref.read(membersProvider.notifier).add(friendPubHex);
+  }
+
+  /// Leave the group: drop our key and roster. Use this to recover from a fork
+  /// (we both created a group) — leave, then get added by the other person.
+  Future<void> leaveGroup() async {
+    await _storage.delete(key: 'groupkey');
+    await _storage.delete(key: 'groupepoch');
+    await _storage.delete(key: 'groupprovisional');
+    _provisional = false;
+    await ref.read(membersProvider.notifier).clear();
+    state = const AsyncData(null);
   }
 
   /// Remove a member: mint a new key at the next epoch and wrap it to everyone
@@ -89,7 +135,7 @@ class GroupController extends AsyncNotifier<GroupSession?> {
     final kp = await ref.read(identityProvider.future);
     final ndk = ref.read(ndkProvider);
     for (final m in remaining) {
-      ndk.broadcast.broadcast(nostrEvent: await next.buildWrappedKeyEvent(kp, m));
+      await _publish(ndk, await next.buildWrappedKeyEvent(kp, m));
     }
     await _persist(next);
     await ref.read(membersProvider.notifier).remove(pubHex);
@@ -99,6 +145,7 @@ class GroupController extends AsyncNotifier<GroupSession?> {
   Future<void> _persist(GroupSession s) async {
     await _storage.write(key: 'groupkey', value: hex.encode(s.groupKey));
     await _storage.write(key: 'groupepoch', value: '${s.epoch}');
+    await _storage.write(key: 'groupprovisional', value: '$_provisional');
   }
 }
 
@@ -130,6 +177,11 @@ class MembersController extends AsyncNotifier<List<String>> {
     final next = cur.where((m) => m != pubHex).toList();
     await _storage.write(key: 'members', value: jsonEncode(next));
     state = AsyncData(next);
+  }
+
+  Future<void> clear() async {
+    await _storage.delete(key: 'members');
+    state = const AsyncData([]);
   }
 }
 
@@ -193,14 +245,14 @@ class Publisher {
   final Ref ref;
   Publisher(this.ref);
 
-  /// Publish a specific fix. No-op (false) if there's no group.
+  /// Publish a specific fix. False if there's no group or no relay accepted it.
   Future<bool> publish(Position fix) async {
     final group = ref.read(groupProvider).asData?.value;
     if (group == null) return false;
     final kp = await ref.read(identityProvider.future);
     final ndk = ref.read(ndkProvider);
-    ndk.broadcast.broadcast(nostrEvent: await group.buildPositionEvent(kp, fix));
-    return true;
+    final acks = await _publish(ndk, await group.buildPositionEvent(kp, fix));
+    return acks > 0;
   }
 
   /// Publish the current one-shot fix. False if no group or no fix available.

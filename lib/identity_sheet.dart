@@ -87,8 +87,10 @@ class _IdentitySheetState extends ConsumerState<IdentitySheet> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text(
-            "You're not in a group yet. Create one, or share your key above "
-            "with a friend who'll add you — the group key then arrives here automatically.",
+            "You're not in a group yet. Share your key above with a friend who'll "
+            "add you — the group key then arrives here automatically. Only one "
+            "person should Create the group; if you both create, you each get a "
+            "different key and won't see each other.",
           ),
           const SizedBox(height: 12),
           FilledButton.icon(
@@ -143,8 +145,35 @@ class _IdentitySheetState extends ConsumerState<IdentitySheet> {
           ),
           const SizedBox(height: 16),
           _members(),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: _confirmLeave,
+            icon: const Icon(Icons.logout, size: 16, color: Colors.red),
+            label: const Text('Leave group', style: TextStyle(color: Colors.red)),
+          ),
         ],
       );
+
+  Future<void> _confirmLeave() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Leave group?'),
+        content: const Text(
+          'Drops your group key and member list. Use this to recover from a fork '
+          '(you both created a group): leave, then have the other person add you. '
+          'Your key stays the same, so they can re-add you.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Leave')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await ref.read(groupProvider.notifier).leaveGroup();
+    setState(() => _status = 'left the group');
+  }
 
   Widget _members() {
     final members = ref.watch(membersProvider);
