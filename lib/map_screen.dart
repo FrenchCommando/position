@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,6 +19,9 @@ class MapScreen extends ConsumerStatefulWidget {
 
 class _MapScreenState extends ConsumerState<MapScreen> {
   final _mapController = MapController();
+  // Current map heading in degrees; drives the compass FAB's visibility and the
+  // needle's rotation. Updated from the camera, not assumed.
+  double _rotation = 0;
 
   @override
   void dispose() {
@@ -94,6 +99,11 @@ class _MapScreenState extends ConsumerState<MapScreen> {
             options: MapOptions(
               initialCenter: const LatLng(48.8566, 2.3522),
               initialZoom: 12,
+              onPositionChanged: (camera, _) {
+                if (camera.rotation != _rotation) {
+                  setState(() => _rotation = camera.rotation);
+                }
+              },
               // On desktop/web (manual source) tapping the map drops your
               // position there and publishes it — so two devices show as two
               // distinct dots instead of stacking on the default point.
@@ -165,6 +175,20 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
+          // Only shown when the map is off-north; tapping snaps it back. The
+          // needle rotates opposite to the heading so it always points to north.
+          if (_rotation != 0) ...[
+            FloatingActionButton.small(
+              heroTag: 'north',
+              tooltip: 'North up',
+              onPressed: () => _mapController.rotate(0),
+              child: Transform.rotate(
+                angle: -_rotation * math.pi / 180,
+                child: const Icon(Icons.navigation),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           FloatingActionButton.small(
             heroTag: 'recenter',
             tooltip: 'Center on everyone',
