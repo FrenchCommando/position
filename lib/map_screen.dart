@@ -175,20 +175,19 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // Only shown when the map is off-north; tapping snaps it back. The
-          // needle rotates opposite to the heading so it always points to north.
-          if (_rotation != 0) ...[
-            FloatingActionButton.small(
-              heroTag: 'north',
-              tooltip: 'North up',
-              onPressed: () => _mapController.rotate(0),
-              child: Transform.rotate(
-                angle: -_rotation * math.pi / 180,
-                child: const Icon(Icons.navigation),
-              ),
+          // Always available; tapping snaps the map back to north. The needle
+          // rotates opposite to the heading so it always points to true north
+          // (straight up when already north-up).
+          FloatingActionButton.small(
+            heroTag: 'north',
+            tooltip: 'North up',
+            onPressed: () => _mapController.rotate(0),
+            child: Transform.rotate(
+              angle: -_rotation * math.pi / 180,
+              child: const Icon(Icons.navigation),
             ),
-            const SizedBox(height: 12),
-          ],
+          ),
+          const SizedBox(height: 12),
           FloatingActionButton.small(
             heroTag: 'recenter',
             tooltip: 'Center on everyone',
