@@ -241,10 +241,16 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
             ),
           ),
-          Icon(
-            Icons.location_on,
-            color: isMe ? Colors.blue : Colors.deepOrange,
-            size: 32,
+          // location_on's tip sits ~3px above the glyph's bottom edge (24px
+          // viewBox, tip at y≈21, scaled to size 32). Pull the box down by that
+          // much so the actual tip — not the box edge — lands on the point.
+          Transform.translate(
+            offset: const Offset(0, 3),
+            child: Icon(
+              Icons.location_on,
+              color: isMe ? Colors.blue : Colors.deepOrange,
+              size: 32,
+            ),
           ),
         ],
       ),
