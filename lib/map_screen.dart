@@ -222,8 +222,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       point: LatLng(p.lat, p.lon),
       width: 120,
       height: 56,
-      // Anchor the box bottom (pin tip) at the coordinate; label floats above.
-      alignment: Alignment.bottomCenter,
+      // topCenter places the whole box above the point, so the box's bottom
+      // (the pin tip) lands on the coordinate; label floats above.
+      alignment: Alignment.topCenter,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.end,
